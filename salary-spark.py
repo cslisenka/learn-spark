@@ -1,7 +1,8 @@
-from ctypes import Array
+from pyspark.sql import SparkSession, Window
 
+# create session
 from pyspark.sql import SparkSession
-
+from pyspark.sql.functions import max, col, rank
 # create session
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType
 
@@ -20,9 +21,24 @@ df.printSchema()
 # show data frame
 df.show()
 
+# work as data frame/data set API
+# find max salary by department
+df.groupBy("department_id").agg(
+    max("salary").alias("max_salary")
+).orderBy(
+    col("max_salary").desc()
+).show()
+
+# find max 3 salaries by department using window functions
+df.withColumn(
+    "rank",
+    rank().over(Window.partitionBy("department_id").orderBy(col("salary").desc()))
+).filter(
+    col("rank") <= 3
+).orderBy("department_id", "rank").show()
+
 # work as SQL
 df.createOrReplaceTempView("salary")
-spark.sql("SELECT * FROM salary").show()
 
 # find max salary by department
 spark.sql("SELECT department_id, max(salary) "
@@ -31,7 +47,7 @@ spark.sql("SELECT department_id, max(salary) "
           "ORDER BY max(salary) DESC"
           ).show()
 
-# find max 2 salaries by department using window functions
+# find max 3 salaries by department using window functions
 spark.sql("SELECT * FROM "
           "(SELECT department_id, employee_id, salary, "
           "RANK() OVER (PARTITION BY department_id ORDER BY salary DESC) AS rank "
