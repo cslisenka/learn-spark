@@ -1,6 +1,7 @@
-from pyspark.sql import SparkSession
+from pyspark.sql import SparkSession, Window
 from math import radians, cos, sin, asin, sqrt
 
+from pyspark.sql.functions import posexplode, split, col, lead, udf, sum
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType
 
 
@@ -39,16 +40,43 @@ ways_schema = StructType([
 ])
 
 nodes_df = spark.read.option("header", True).schema(nodes_schema).csv("data/nodes.csv")
-nodes_df.createOrReplaceTempView("nodes")
 nodes_df.printSchema()
-spark.sql("SELECT * FROM nodes").show()
 
 ways_df = spark.read.option("header", True).schema(ways_schema).csv("data/ways.csv")
-ways_df.createOrReplaceTempView("ways")
 ways_df.printSchema()
+
+distanceUDF = udf(lambda lat1, lon1, lat2, lon2: distance(lat1, lon1, lat2, lon2), DoubleType())
+
+# data frames
+distances_df = ways_df.select(
+    "way_id", posexplode(split("nodes", " ")).alias("position", "node_id")
+).join(
+    nodes_df, "node_id", "left"
+).withColumn(
+    "next_node_id", lead("node_id").over(Window.partitionBy("way_id").orderBy(col("position").desc()))
+).withColumn(
+    "next_node_lat", lead("lat").over(Window.partitionBy("way_id").orderBy(col("position").desc()))
+).withColumn(
+    "next_node_lon", lead("lon").over(Window.partitionBy("way_id").orderBy(col("position").desc()))
+).filter(
+    col("next_node_id").isNotNull()
+).withColumn(
+    "path_distance", distanceUDF(col("lat"), col("lon"), col("next_node_lat"), col("next_node_lon"))
+)
+
+distances_df.show()
+
+distances_df.groupBy("way_id").agg(
+    sum("path_distance").alias("way_distance")
+).orderBy(col("way_distance").desc()).show()
+
+# sql
+nodes_df.createOrReplaceTempView("nodes")
+spark.sql("SELECT * FROM nodes").show()
+ways_df.createOrReplaceTempView("ways")
 spark.sql("SELECT * FROM ways").show()
 
-distances_df = spark.sql(
+distances_sql_df = spark.sql(
     """
     WITH exploded AS (
         SELECT way_id, posexplode(arr) AS (position, node)
@@ -76,8 +104,8 @@ distances_df = spark.sql(
     ) SELECT * FROM path_with_distance
     """)
 
-distances_df.show()
-distances_df.createOrReplaceTempView("path_distance")
+distances_sql_df.show()
+distances_sql_df.createOrReplaceTempView("path_distance")
 
 # Calculate TOP ways
 spark.sql("""
